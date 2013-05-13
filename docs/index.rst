@@ -12,6 +12,12 @@ Library Use
 .. automodule:: testtrackpro
    :members:
 
+License
+===========
+
+.. include:: ../LICENSE.txt
+
+
 Indices and tables
 ==================
 

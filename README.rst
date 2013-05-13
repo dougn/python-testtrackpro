@@ -39,3 +39,21 @@ call will be made. In either situation the lock will be released.
             defect.priority = "Immediate"
         ## ttp.saveDefect(defect) is called, or ttp.cancelSave(defect.recordid) on exception.
     ## ttp.DatabaseLogoff() is called, even if an exception occured.
+
+References
+----------
+
+Project:
+
+* `Documentation <http://pythonhosted.org/testtrackpro/>`_
+* `PyPi <https://pypi.python.org/pypi/testtrackpro>`_
+* `GitHub <https://github.com/dougn/python-testtrackpro>`_
+
+External:
+
+* `suds <https://fedorahosted.org/suds/>`_
+* `Seapine Software <http://www.seapine.com/>`_
+* `TestTrack <http://www.seapine.com/testtrack.html>`_
+* `TestTrack Pro <http://www.seapine.com/ttpro.html>`_
+* `TestTrack SOAP API <http://labs.seapine.com/TestTrackSDK.php>`_
+* `TestTrack Python Tutorial <http://labs.seapine.com/wiki/index.php/TestTrack_SOAP_SDK_Tutorial_-_Python>`_

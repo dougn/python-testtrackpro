@@ -124,7 +124,7 @@ import xml.sax._exceptions  #.SAXParseException
 import suds.plugin     ## cleanup TestTrack data vs dateTime WSDL errors
 import suds.mx.encoded ## monkey patch for polymorphic arrays
 
-__version__ = [0,1,0]
+__version__ = [0,1,1]
 __version_string__ = '.'.join(str(x) for x in __version__)
 
 __author__ = 'Doug Napoleone'
@@ -683,21 +683,21 @@ class _TTPEditContext(object):
         return self._name
     
     def save(self, *args, **kwdargs):
-        print self._save_name,
+        #print self._save_name,
         if not self._locked:
-            print "already unlocked"
+            #print "already unlocked"
             return
-        print "unlocking"
+        #print "unlocking"
         res = self._save(self._entity,*args,**kwdargs)
         self._locked = False
         return res
         
     def cancelSave(self):
-        print self._cancel_name,
+        #print self._cancel_name,
         if not self._locked:
-            print "already unlocked"
+            #print "already unlocked"
             return
-        print "unlocking"
+        #print "unlocking"
         res = self._cancel(self._entity.recordid)
         self._locked = False
         return res
