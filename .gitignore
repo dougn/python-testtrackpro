@@ -18,6 +18,11 @@ develop-eggs
 lib
 lib64
 
+# Doug
+*.env
+docs/_build
+comments.txt
+
 # Installer logs
 pip-log.txt
 
