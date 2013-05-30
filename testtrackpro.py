@@ -54,7 +54,7 @@ be managed for you in the client object.
     ttp = testtrackpro.TTP('http://hostname/', 'Project', 'username', 'password')
     adt = ttp.getTableList()
     atc = ttp.getColumnsForTable(tablename)
-    defect = ttp.getDefect(1) # maps to getDefect(cookie, 42)
+    defect = ttp.getDefect(42) # maps to getDefect(cookie, 42)
     ttp.DatabaseLogoff()
 
 Python Contexts
@@ -92,6 +92,69 @@ out when used in a ``with`` statement.
         defect = ttp.getDefect(42)
     ## ttp.DatabaseLogOff() implicitly called on success or error
 
+Edit Locks
+----------
+
+As mentioned above, only one person can be editing an entity at a time on the
+TestTrack server. This means that you will often get an error trying to edit
+an entity, and there is no clean way of detecting if an entity is currently
+locked or not; due to race conditions.
+
+This leads to some painful defensive programming for this very common
+occurance.
+
+.. code:: python
+
+    failed_to_edit = []
+    for id in defect_ids_to_edit:
+        try:
+            with ttp.editDefect(id) as defect:
+                defect.summary = "new changed title"
+                ## bunch of other code
+        except TTPAPIError, e:
+            ## the edit lock error is code 22, and it is a string.
+            if e.fault and e.fault.detail == "22":
+                failed_to_edit.append(id)
+            else:
+                ## unexpected error, re-raise it.
+                raise e
+                
+This is much more work than it should be. and the try/except work being done
+here is again what contexts are supposed to simplify. So every edit API call
+has been extended to have a new keyword argument ``ignoreEditLockError`` that
+defaults to ``False``. When set to ``True`` it will swallow the TTPAPIError
+code ``"22"``. The object returned will be an empty entity of the proper type.
+This will be a context entity, just as if the call had succeeded. This means
+that the edit entity status functions will work on the entity.
+
+.. code:: python
+
+    failed_to_edit = []
+    for id in defect_ids_to_edit:
+        with ttp.editDefect(id, ignoreEditLockError=True) as defect:
+            ## helper to immediatly stop processing
+            break_context_on_edit_lock_failure(defect)
+            defect.summary = "new changed title"
+            ## bunch of other code
+        if edit_lock_failed(defect):
+            failed_to_edit.append(id)
+
+.. note:: Only the edit lock error ``"22"`` is captured. All other errors must
+          be handled explictly in your code.
+          
+.. warning::
+             A new empty entity is returned when ``ignoreEditLockError`` is
+             set to ``True``. This means you MUST test to see if you have the
+             real entity to work with.
+
+    >>> d = ttp.editDefect(1, ignoreEditLockError=True)
+    >>> print d.recordid
+    None
+    >>> edit_lock_failed(d)
+    True
+    >>> have_edit_lock(d)
+    False
+    >>> 
 
 
 
@@ -124,7 +187,7 @@ import xml.sax._exceptions  #.SAXParseException
 import suds.plugin     ## cleanup TestTrack data vs dateTime WSDL errors
 import suds.mx.encoded ## monkey patch for polymorphic arrays
 
-__version__ = [0,1,1]
+__version__ = [1,0,0]
 __version_string__ = '.'.join(str(x) for x in __version__)
 
 __author__ = 'Doug Napoleone'
@@ -157,8 +220,45 @@ _ttpwsdlfixplugin = _TTPWSDLFixPlugin()
 class TTPAPIError(Exception):
     """Base Exception for all API errors.
     """
-    pass
+    def __init__(self, *args, **kwdargs):
+        super(TTPAPIError, self).__init__(*args, **kwdargs)
+        self._fault = None
+        self._reason = ""
+        self._document = None
+        if len(self.args):
+            if hasattr(self.args[0], 'fault'):
+                self._fault = self.args[0].fault
+                self._reason = self.args[0].fault.faultstring
+            if hasattr(self.args[0], 'document'):
+                self._document = self.args[0].document
+            if hasattr(self.args[0], 'reason'):
+                self._reason = self.args[0].reason
+            if isinstance(self.args[0], basestring):
+                self._reason = self.args[0]
+        self._reason = self.message
+        
+    @property
+    def fault(self):
+        """Soap fault Envelope, if there is one, else will be None
+        """
+        return self._fault
 
+    @property
+    def document(self):
+        """SOAP document associated with the error if there is one, else will
+        be None.
+        """
+        return self._document
+    
+    @property
+    def reason(self):
+        """Low level SOAP or HTTP reason for the error. Will always be a
+        valid string, but may be empty if no reason can be determined.
+        Will back off to exception message.
+        """
+        return self._reason
+
+    
 class TTPConnectionError(TTPAPIError):
     """Errors communicating with the TestTrack SOAP Service.
     """
@@ -589,27 +689,163 @@ class TTP(object):
                     logging.warn(
                             "Exception while attempting to logout "
                             "with a call to: DatabaseLogoff\dError: " + str(e))
+
+def _get_context(edit_context_entity):
+    context = getattr(edit_context_entity, '__context__', lambda : None)()
+    if not context:
+        raise TTPAPIError("Not an edit context entity object.")
+    return context
+
+def is_edit_context_entity(edit_context_entity):
+    """Is this an edit context entity (object returned by ttp.editXXX())
+    that can be safely used with the status functions in this module,
+    and use in contexts.
+    """
+    return hasattr(edit_context_entity, '__context__')
     
+def edit_lock_failed(edit_context_entity):
+    """Helper function to check if an edit context entity errored on getting
+    the edit lock. This is useful in conjunction with the special edit API
+    argument ignoreEditLockError=True, which will supress the failed edit lock
+    exception.
+    
+    .. code:: python
+    
+        with ttp.editDefect(1, ignoreEditLockError=True) as defect:
+            defect.priority = "Immediate"
+        if edit_lock_failed(defect):
+            # deal with the issue
+            pass
+            
+    """
+    return _get_context(edit_context_entity).lock_failed
+
+def break_context_on_edit_lock_failure(*edit_context_entities):
+    """Force immediate break in the with context if the edit lock failed.
+    
+    .. code:: python
+    
+        with ttp.editDefect(1, ignoreEditLockError=True) as defect:
+            break_context_on_edit_lock_failure(defect) ## stop processing here
+            defect.priority = "Immediate"
+        if edit_lock_failed(defect):
+            # deal with the issue
+            pass
+            
+    for multiple with statements:
+    
+    .. code:: python
+    
+        with ttp.editDefect(1, ignoreEditLockError=True) as a:
+            with ttp.editDefect(2, ignoreEditLockError=True) as b, ttp.editDefect(3, ignoreEditLockError=True) as c:
+                ## will break out to top if a failed lock
+                break_context_on_edit_lock_failure(a,b,c)
+                
+    """
+    for entity in edit_context_entities:
+        error = _get_context(entity).lock_error
+        if error:
+            raise error
+    ## return true so it can be used in an all call.
+    return True
+
+def have_edit_lock(edit_context_entity):
+    """Helper function to check if an edit context entity is still open
+    for edit.
+    
+    .. code:: python
+    
+        with ttp.editDefect(1) as defect:
+            if defect.priority == "Immediate":
+                ttp.cancelSave(defect)
+            # ...
+            # more code
+            # ...
+            if have_edit_lock(defect):
+                defect.Summary = "Updated Summary"
+
+        assert not have_edit_lock(defect)
+            
+    """
+    return _get_context(edit_context_entity).locked
+    
+def has_errored(edit_context_entity):
+    """Helper function to check if an edit context entity errored.
+    This is useful when you capture and ignore an error, or as part of error
+    handling.
+    
+    .. code:: python
+    
+        try:
+            with ttp.editDefect(1) as defect:
+                defect.priority = "Immediate"
+                raise RuntimeError('some error')
+        except:
+            # This is bad code, please do not do this.
+            pass
+            
+        if has_errored(defect):
+            # deal with the issue
+            pass
+            
+    """
+    return _get_context(edit_context_entity).errored
+    
+def was_saved(edit_context_entity):
+    """Helper function to check if an edit context entity was saved.
+    This is useful in conjunction with the special edit API argument
+    ignoreEditLockError=True, which will supress the failed edit lock
+    exception, and when the potential for a cancelSave was issued.
+
+    .. code:: python
+    
+        with ttp.editDefect(1, ignoreEditLockError=True) as defect:
+            if defect.priority == "Immediate":
+                ttp.cancelSave(defect)
+            defect.priority = "Immediate"
+        if was_saved(defect):
+            # The priority was changed
+            pass
+        elif has_errored(defect):
+            # It was not saved due to an error
+            if edit_lock_failed(defect):
+                # because the edit lock failed
+                pass
+            else:
+                # because of some other error
+                pass
+            
+    """
+    return _get_context(edit_context_entity).saved
+
 class _long(long):
     pass
 
 class _TTPEditContext(object):
     
     @classmethod
-    def call_method(cls, ttp, method_name, method, *args, **kwdargs):
-        context = cls(ttp, method_name, method, *args, **kwdargs)
+    def call_method(cls, ttp, method_name, method,
+                    *args, **kwdargs):
+        context = cls(ttp, method_name, method,
+                      *args, **kwdargs)
         entity = context.entity
         entity.__enter__ = context.__enter__
         entity.__exit__ = context.__exit__
         entity.__context__ = context.__context__
-        entity.recordid = _long(entity.recordid)
-        entity.recordid.__context__ = context.__context__
+        if entity.recordid is not None:
+            entity.recordid = _long(entity.recordid)
+            entity.recordid.__context__ = context.__context__
         return entity
     
-    def __init__(self, ttp, method_name, method, *args, **kwdargs):
+    def __init__(self, ttp, method_name, method,
+                 *args, **kwdargs):
         self._locked = False
         self._ttp = ttp
         self._method_name = method_name
+        ignoreEditLockError = False
+        if 'ignoreEditLockError' in kwdargs:
+            ignoreEditLockError = kwdargs.pop('ignoreEditLockError')
+        self._ignore_lock_error = ignoreEditLockError
         if method_name.endswith('ByRecordID'):
             self._editbyid_name = method_name
             self._edit_name = method_name[:-10]
@@ -622,8 +858,24 @@ class _TTPEditContext(object):
         self._save_name = 'save' + self._table
         self._save = ttp._build_partial(self._save_name)
         self._cancel = ttp._build_partial(self._cancel_name)
-        self._entity = ttp._call_method(method, *args, **kwdargs)
-        self._locked = True
+        self._errored = False
+        self._success = False
+        self._saved = False
+        self._lock_failed = True
+        self._lock_error = None
+        try:
+            self._entity = ttp._call_method(method, *args, **kwdargs)
+        except TTPAPIError, e:
+            self._lock_error = e
+            if (ignoreEditLockError and e.fault and e.fault.detail == '22'):
+                ## Someone else has this entity locked.
+                logging.warn(str(e))
+                self._entity = ttp.create(self._name)
+            else:
+                raise e
+        else:
+            self._lock_failed = False
+            self._locked = True
     
     def __context__(self):
         return self
@@ -632,8 +884,15 @@ class _TTPEditContext(object):
         return self._entity
     
     def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type:
+            self._errored = True
+        
         if not self._locked:
-            return
+            if self._ignore_lock_error and exc_value is self._lock_error:
+                ## swallow the lock error, but only if it the one we raised
+                ## and not some other lock error.
+                return True
+            return False
 
         if exc_type:
             try:
@@ -643,10 +902,12 @@ class _TTPEditContext(object):
                     "Exception while attempting to release an edit lock "
                     "with a call to: " + self._cancel_name +
                     "\n    Error: " + str(e))
+            self._success = False
         else:
             try:
                 self.save()
             except Exception, e:
+                self._errored = True
                 logging.warn(
                     "Exception while attempting to release an edit lock "
                     "with a call to: " + self._save_name +
@@ -682,6 +943,30 @@ class _TTPEditContext(object):
     def cname(self):
         return self._name
     
+    @property
+    def succeeded(self):
+        return self._success
+    
+    @property
+    def errored(self):
+        return self._errored
+    
+    @property
+    def saved(self):
+        return self._saved
+    
+    @property
+    def locked(self):
+        return self._locked
+
+    @property
+    def lock_failed(self):
+        return self._lock_failed
+    
+    @property
+    def lock_error(self):
+        return self._lock_error
+    
     def save(self, *args, **kwdargs):
         #print self._save_name,
         if not self._locked:
@@ -690,6 +975,8 @@ class _TTPEditContext(object):
         #print "unlocking"
         res = self._save(self._entity,*args,**kwdargs)
         self._locked = False
+        self._success = True
+        self._saved = True
         return res
         
     def cancelSave(self):
@@ -700,6 +987,8 @@ class _TTPEditContext(object):
         #print "unlocking"
         res = self._cancel(self._entity.recordid)
         self._locked = False
+        self._success = True
+        self._saved = False
         return res
     
 def _polymprphic_cast(self, content):

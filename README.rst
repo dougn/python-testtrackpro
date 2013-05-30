@@ -40,6 +40,41 @@ call will be made. In either situation the lock will be released.
         ## ttp.saveDefect(defect) is called, or ttp.cancelSave(defect.recordid) on exception.
     ## ttp.DatabaseLogoff() is called, even if an exception occured.
 
+
+Additionally there is a new special edit context API extension when using
+python contexts for ignoring the edit lock error, when someone else has the
+edit lock on an entity. This is very useful when you do not want your script
+or service to error out on a failed edit lock, but instead want to continue
+processing.
+
+
+.. code:: python
+
+    import testtrackpro
+    with testtrackpro.TTP('http://hostname/', 'Project', 'username', 'password') as ttp:
+        with ttp.editDefect(11, bDownloadAttachments=False, ignoreEditLockError=True) as defect:
+            defect.priority = "Immediate"
+        ## ttp.saveDefect(defect) is called, or ttp.cancelSave(defect.recordid) on exception.
+        
+        assert not testtrackpro.have_edit_lock(defect)
+        
+        if testtrackpro.was_saved(defect):
+            # The priority was changed
+            pass
+        elif testtrackpro.has_errored(defect):
+            # It was not saved due to an error
+            pass
+            if testtrackpro.edit_lock_failed(defect):
+                # because the edit lock failed
+                pass
+            else:
+                # because of some other error
+                # NOTE: unless there was other code to catch and ignore the
+                #       error, this code is unreachable.
+                pass
+    ## ttp.DatabaseLogoff() is called, even if an exception occured.
+
+
 References
 ----------
 

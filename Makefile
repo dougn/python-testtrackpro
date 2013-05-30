@@ -14,11 +14,8 @@ clean:
 	python setup.py clean
 	cd docs && make clean
 	rm -f commit.txt
-
-test:
-	cd docs && make doctest
 	
-build: test
+build:
 	python setup.py sdist build_sphinx
 
 release: build
